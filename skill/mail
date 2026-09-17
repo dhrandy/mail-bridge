@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Send email through the mail-bridge (this repo).
+
+Usage:
+  mail health
+  mail send --to addr --subject "s" --body "text"
+
+Auth: MAIL_BRIDGE_URL and MAIL_BRIDGE_API_KEY env vars. The key is sent as
+the X-Api-Key header to the configured bridge host only, and is never
+printed, logged, or persisted.
+"""
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+def bridge_url():
+    base = os.environ.get("MAIL_BRIDGE_URL", "").rstrip("/")
+    if not base:
+        sys.exit("error: set MAIL_BRIDGE_URL")
+    return base
+
+
+def api_key():
+    key = os.environ.get("MAIL_BRIDGE_API_KEY", "").strip()
+    if not key:
+        sys.exit("error: set MAIL_BRIDGE_API_KEY")
+    return key
+
+
+def request(path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(bridge_url() + path, data=data, method="POST" if data else "GET")
+    if data:
+        req.add_header("Content-Type", "application/json")
+        req.add_header("X-Api-Key", api_key())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        try:
+            detail = json.loads(e.read())
+        except Exception:  # noqa: BLE001
+            detail = e.code
+        sys.exit(f"error: bridge returned {e.code}: {detail}")
+
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] == "health":
+        print(json.dumps(request("/health")))
+        return
+    if args[0] == "send":
+        to = subject = body = None
+        i = 1
+        while i < len(args):
+            if args[i] == "--to" and i + 1 < len(args):
+                to = args[i + 1]; i += 2
+            elif args[i] == "--subject" and i + 1 < len(args):
+                subject = args[i + 1]; i += 2
+            elif args[i] == "--body" and i + 1 < len(args):
+                body = args[i + 1]; i += 2
+            else:
+                i += 1
+        if not (to and subject and body):
+            sys.exit("usage: mail send --to addr --subject \"s\" --body \"text\"")
+        print(json.dumps(request("/send", {"to": to, "subject": subject, "body": body})))
+        return
+    sys.exit("usage: mail [health|send --to addr --subject \"s\" --body \"text\"]")
+
+
+if __name__ == "__main__":
+    main()
